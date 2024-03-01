@@ -1,10 +1,12 @@
 package ca.siva.kafkastream.config;
 
-import ca.siva.kafkastream.model.AggregatedJsonMessage;
-import ca.siva.kafkastream.model.JsonMessage;
+import ca.siva.kafkastream.GenericRecordUtil;
+import ca.siva.kafkastream.model.AggregatedData;
 import ca.siva.kafkastream.service.ElasticsearchService;
-import com.fasterxml.jackson.databind.JsonNode;
+import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
+import io.confluent.kafka.streams.serdes.avro.GenericAvroSerde;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.avro.generic.GenericRecord;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.utils.Bytes;
@@ -12,7 +14,7 @@ import org.apache.kafka.streams.KeyValue;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.kstream.*;
 import org.apache.kafka.streams.state.SessionStore;
-import org.apache.kafka.streams.state.WindowStore;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -23,92 +25,123 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.Collections;
+import java.util.Map;
+import java.util.Objects;
+
+import static ca.siva.kafkastream.GenericRecordUtil.convertValue;
+import static ca.siva.kafkastream.GenericRecordUtil.findNestedValue;
 
 @Configuration
 @EnableKafkaStreams
 @Slf4j
 public class KafkaStreamsConfig {
 
+    private final ElasticsearchService elasticsearchService;
+    private final Duration inactivityGap = Duration.ofMinutes(2);
+
     @Value("${kafka.topic.input}")
     private String inputTopic;
 
-    @Value("${kafka.topic.output}")
-    private String outputTopic;
 
     @Value("${message.filter}")
     private String filterValue;
 
-    private final ElasticsearchService elasticsearchService;
-    private final Duration inactivityGap = Duration.ofSeconds(30);
+
+    @Value("${schema.registry.url}")
+    private String schemaRegistryUrl;
+
+    @Value("${schema.specific.avro.reader}")
+    private String specificAvroReader;
 
     public KafkaStreamsConfig(final ElasticsearchService elasticsearchService) {
         this.elasticsearchService = elasticsearchService;
     }
+
+
+    @Bean(name = "customSerdeConfig")
+    public Map<String, ?> serdeConfig() {
+        return Map.of(
+                AbstractKafkaSchemaSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, schemaRegistryUrl,
+                "specific.avro.reader", specificAvroReader
+        );
+    }
+
     @Bean
-    public KStream<String, JsonMessage> kStream(StreamsBuilder streamsBuilder) {
-        Serde<JsonMessage> jsonMessageSerde = new JsonSerde<>(JsonMessage.class);
-        Serde<AggregatedJsonMessage> aggregatedJsonMessageSerde = new JsonSerde<>(AggregatedJsonMessage.class);
+    public KStream<String, GenericRecord> kStream(StreamsBuilder streamsBuilder, @Qualifier("customSerdeConfig") Map<String, ?> serdeConfig) {
 
-        KStream<String, JsonMessage> stream = streamsBuilder
-                .stream(inputTopic, Consumed.with(Serdes.String(), jsonMessageSerde))
-                .filter((key, jsonMessage) -> {
-                    log.info("data: {}, filter: {}, match: {}", jsonMessage, filterValue, jsonMessage.getCommonValue().equalsIgnoreCase(filterValue));
-                    return jsonMessage.getCommonValue().equalsIgnoreCase(filterValue);
+        final Serde<GenericRecord> valueGenericAvroSerde = new GenericAvroSerde();
+        log.info("map: {}", serdeConfig);
+        valueGenericAvroSerde.configure(serdeConfig, false);
+        Serde<AggregatedData> aggregatedJsonMessageSerde = new JsonSerde<>(AggregatedData.class);
+
+        KStream< String, GenericRecord> stream = streamsBuilder
+                .stream(inputTopic, Consumed.with(Serdes.String(), valueGenericAvroSerde))
+                .filter((key, genericRecord) -> {
+                    Object filterFieldValue =  convertValue(findNestedValue(genericRecord, "commonValue"));
+                    Object groupByFieldValue =  convertValue(findNestedValue(genericRecord, "id"));
+
+                    log.info("value read: {}, type: {}", filterFieldValue, filterFieldValue.getClass().getName());
+                    log.info("groupBy read: {}, type: {}", groupByFieldValue, groupByFieldValue.getClass().getName());
+
+                    if (filterFieldValue instanceof String commonValue && groupByFieldValue instanceof String) {
+                        log.info("Data: {}, Filter: {}, Match: {}", genericRecord, filterValue, filterValue.equalsIgnoreCase(commonValue));
+                        return filterValue.equalsIgnoreCase(commonValue) && Objects.nonNull(groupByFieldValue);
+                    }
+                    return false;
                 })
-                .selectKey((key, value) -> value.getId());
+                .selectKey((key, genericRecord) -> (String) convertValue(findNestedValue(genericRecord, "id")));
 
-
-        KTable<Windowed<String>, AggregatedJsonMessage> aggregatedTable = stream
-                .groupByKey(Grouped.with(Serdes.String(), jsonMessageSerde))
+        KTable<Windowed<String>, AggregatedData> aggregatedTable = stream
+                .groupByKey(Grouped.with(Serdes.String(), valueGenericAvroSerde))
                 .windowedBy(SessionWindows.ofInactivityGapWithNoGrace(inactivityGap))
                 .aggregate(
-                        AggregatedJsonMessage::new, // Initializer
+                        AggregatedData::new, // Initializer
                         (key, value, aggregate) -> {
-                            // Assuming addMessage method correctly updates and returns the aggregate
-                            aggregate.addMessage(value);
+                            Map<String, Object> newValueMap = GenericRecordUtil.convertGenericRecordToMap(value);
+                            aggregate.add(newValueMap);
                             return aggregate;
                         }, // Aggregator
                         (aggKey, aggOne, aggTwo) -> {
-                            log.info("Aggregation aggOne:{}, aggTwo: {}", aggOne, aggTwo);
-                            return aggOne.merge(aggTwo);
+                            aggOne.merge(aggTwo);
+                            return aggOne;
                         }, // Session Merger
-                        Materialized.<String, AggregatedJsonMessage, SessionStore<Bytes, byte[]>>as("aggregated-window-store")
+                        Materialized.<String, AggregatedData, SessionStore<Bytes, byte[]>>as("aggregated-window-store")
                                 .withKeySerde(Serdes.String())
                                 .withValueSerde(aggregatedJsonMessageSerde)
                 )
                 .suppress(Suppressed.untilWindowCloses(Suppressed.BufferConfig.unbounded()));
 
+        // ingest to es
         aggregatedTable
                 .toStream()
                 .peek((key, value) -> log.info("event ingested: {}", value))
                 .map((key, value) -> {
                     DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
                             .withZone(ZoneId.systemDefault());
-                    String windowStartStr = formatter.format(Instant.ofEpochMilli(key.window().start()));
-                    String windowEndStr = formatter.format(Instant.ofEpochMilli(key.window().end()));
-                    String strKey = String.format("%s@%s-%s", key.key(), windowStartStr, windowEndStr);
                     value.setId(key.key());
+                    log.info("Aggregated value:{}", value);
                     elasticsearchService.ingestToEs(value);
-                    return KeyValue.pair(strKey, value);
+                    return KeyValue.pair(key.key(), value);
                 });
 
-
-        aggregatedTable
-                .toStream()
-                .filter((key, value) -> value != null && !value.getMessages().isEmpty())
-                .foreach((key, value) -> {
-            String actualKey = key.key();
-                    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-                            .withZone(ZoneId.systemDefault());
-                    String start = formatter.format(Instant.ofEpochMilli(key.window().start()));
-                    String end = formatter.format(Instant.ofEpochMilli(key.window().end()));
-            log.info("Windowed Key: {}, Window Start: {}, Window End: {}, Value: {}", actualKey, start, end, value);
-        });
+        // log in the console
+//        aggregatedTable
+//                .toStream()
+//                .filter((key, value) -> value != null && !value.getMessages().isEmpty())
+//                .foreach((key, value) -> {
+//                    String actualKey = key.key();
+//                    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+//                            .withZone(ZoneId.systemDefault());
+//                    String start = formatter.format(Instant.ofEpochMilli(key.window().start()));
+//                    String end = formatter.format(Instant.ofEpochMilli(key.window().end()));
+//                    value.setId(key.key());
+//
+//                    log.info("Aggregated value:{}", value);
+//                });
 
         return stream;
     }
-
-
 
 
 }
