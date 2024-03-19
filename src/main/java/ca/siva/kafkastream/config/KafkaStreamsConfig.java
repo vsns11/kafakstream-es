@@ -2,6 +2,8 @@ package ca.siva.kafkastream.config;
 
 import ca.siva.kafkastream.GenericRecordUtil;
 import ca.siva.kafkastream.model.AggregatedData;
+import ca.siva.kafkastream.processor.CleanupProcessor;
+import ca.siva.kafkastream.processor.CleanupProcessorSupplier;
 import ca.siva.kafkastream.service.ElasticsearchService;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.streams.serdes.avro.GenericAvroSerde;
@@ -92,6 +94,7 @@ public class KafkaStreamsConfig {
                 })
                 .selectKey((key, genericRecord) -> (String) convertValue(findNestedValue(genericRecord, "id")));
 
+
         KTable<Windowed<String>, AggregatedData> aggregatedTable = stream
                 .groupByKey(Grouped.with(Serdes.String(), valueGenericAvroSerde))
                 .windowedBy(SessionWindows.ofInactivityGapWithNoGrace(inactivityGap))
@@ -112,6 +115,8 @@ public class KafkaStreamsConfig {
                 )
                 .suppress(Suppressed.untilWindowCloses(Suppressed.BufferConfig.unbounded()));
 
+        aggregatedTable.toStream().process(() -> new CleanupProcessor(), "aggregated-window-store");
+
         // ingest to es
         aggregatedTable
                 .toStream()
@@ -120,6 +125,7 @@ public class KafkaStreamsConfig {
                     DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
                             .withZone(ZoneId.systemDefault());
                     value.setId(key.key());
+                    value.setLatestUpdateTimestamp(formatter.format(Instant.ofEpochMilli(key.window().start())));
                     log.info("Aggregated value:{}", value);
                     elasticsearchService.ingestToEs(value);
                     return KeyValue.pair(key.key(), value);

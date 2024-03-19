@@ -16,6 +16,7 @@ import java.util.Map;
 @AllArgsConstructor
 public class AggregatedData {
     private String id;
+    private  String latestUpdateTimestamp;
 
     private List<Map<String, Object>> relatedEvents = new ArrayList<>();
 
