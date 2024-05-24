@@ -19,6 +19,9 @@ spring:
         commit.interval.ms: 1000 # Frequency of commit in ms
         state.dir: /tmp/kafka-streams # Directory location for state store
         num.stream.threads: 3 # Number of stream threads in the application
+        connection.max.idle.ms: 900000 # Adjusted max idle time for streams connections
+        reconnect.backoff.ms: 1000 # Time to wait before attempting reconnection after disconnection
+        reconnect.backoff.max.ms: 10000 # Maximum time to wait before attempting reconnection
     consumer:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: io.confluent.kafka.serializers.KafkaAvroDeserializer

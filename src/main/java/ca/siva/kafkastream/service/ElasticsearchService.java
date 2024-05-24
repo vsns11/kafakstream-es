@@ -7,6 +7,9 @@ import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+
 @Service
 @Slf4j
 public class ElasticsearchService {
@@ -19,10 +22,15 @@ public class ElasticsearchService {
     }
 
 
+    public IndexCoordinates indexCoordinates() {
+        String currentDate = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+        String indexName = "aggregated-info"+currentDate;
+        log.info("Injecting the event to elasticsearch in index: {}", indexName);
+        return IndexCoordinates.of(indexName);
+    }
     public void ingestToEs(AggregatedData data) {
-        log.info("Injecting the event to elastic search: {}", data);
-        IndexCoordinates indexCoordinates = IndexCoordinates.of("aggregated-info");
-        operations.save(data, indexCoordinates);
+
+        operations.save(data, indexCoordinates());
     }
 
 }
