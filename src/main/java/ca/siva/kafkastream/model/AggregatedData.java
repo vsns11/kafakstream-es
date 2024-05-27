@@ -17,11 +17,15 @@ import java.util.Map;
 public class AggregatedData {
     private String id;
     private  String latestUpdateTimestamp;
+    private boolean startEventAdded = false;
 
     private List<Map<String, Object>> relatedEvents = new ArrayList<>();
 
     public AggregatedData merge(AggregatedData aggregatedJsonMessage) {
         this.relatedEvents.addAll(aggregatedJsonMessage.getRelatedEvents());
+        if (aggregatedJsonMessage.isStartEventAdded()) {
+            startEventAdded = true;
+        }
         return this;
     }
 
