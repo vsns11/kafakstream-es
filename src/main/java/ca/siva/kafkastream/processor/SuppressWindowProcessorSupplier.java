@@ -31,9 +31,9 @@ public class SuppressWindowProcessorSupplier implements ProcessorSupplier<Window
             private Cancellable punctuator;
 
             @Override
-            public void init(ProcessorContext<Void, Void> context) {
-                this.context = context;
-                this.punctuator = context.schedule(Duration.ofSeconds(30), PunctuationType.WALL_CLOCK_TIME, new IngestPunctuator(this.context, elasticsearchService));
+            public void init(ProcessorContext<Void, Void> ctx) {
+                this.context = ctx;
+                this.punctuator = context.schedule(Duration.ofSeconds(30), PunctuationType.WALL_CLOCK_TIME, new IngestPunctuator(ctx, elasticsearchService));
             }
 
             @Override

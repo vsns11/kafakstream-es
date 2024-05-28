@@ -30,6 +30,7 @@ public class IngestPunctuator implements Punctuator {
                 KeyValue<Windowed<String>, AggregatedData> keyValue = iterator.next();
                 log.info("Ingesting to Elasticsearch: key = {}, value = {}", keyValue.key.key(), keyValue.value);
                 elasticsearchService.ingestToEs(keyValue.value);
+                log.info("Key getting removed: {}", keyValue.key);
                 sessionStore.remove(keyValue.key);
             }
         } catch (Exception e) {
