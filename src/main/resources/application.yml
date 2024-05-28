@@ -12,7 +12,7 @@ spring:
   kafka:
     bootstrap-servers: localhost:9092
     streams:
-      application-id: kafka-cg-aggregator
+      application-id: kafka-cg-aggregator-1
       properties:
         schema.registry.url: http://localhost:8081
         default.key.serde: org.apache.kafka.common.serialization.Serdes$StringSerde
@@ -42,4 +42,8 @@ kafka:
     input: json-input-topic
 
 message:
-  filter: "xyz"
+  filter: "SHIVA_FILTER"
+
+logging:
+  level:
+    org.apache.kafka.streams.processor.internals.ProcessorStateManager: DEBUG
