@@ -28,7 +28,7 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: io.confluent.kafka.serializers.KafkaAvroDeserializer
       group-id: kafka-cg-aggregator
-      auto.offset.reset: latest
+      auto-offset-reset: latest
 
 schema:
   registry:
