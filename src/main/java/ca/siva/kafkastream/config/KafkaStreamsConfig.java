@@ -2,6 +2,7 @@ package ca.siva.kafkastream.config;
 
 import ca.siva.kafkastream.GenericRecordUtil;
 import ca.siva.kafkastream.model.AggregatedData;
+import ca.siva.kafkastream.processor.LoggingMessagingFunction;
 import ca.siva.kafkastream.service.ElasticsearchService;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.streams.serdes.avro.GenericAvroSerde;
@@ -10,13 +11,19 @@ import org.apache.avro.generic.GenericRecord;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.StreamsBuilder;
+import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.kstream.*;
+import org.apache.kafka.streams.state.Stores;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.annotation.EnableKafkaStreams;
+import org.springframework.kafka.streams.messaging.MessagingProcessor;
+import org.springframework.kafka.support.KafkaHeaders;
+import org.springframework.kafka.support.converter.MessagingMessageConverter;
 import org.springframework.kafka.support.serializer.JsonSerde;
+import org.springframework.messaging.Message;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -61,9 +68,13 @@ public class KafkaStreamsConfig {
         final Serde<GenericRecord> valueGenericAvroSerde = new GenericAvroSerde();
         valueGenericAvroSerde.configure(serdeConfig, false);
 
-        final Serde<AggregatedData> aggregatedJsonMessageSerde = new JsonSerde<>(AggregatedData.class);
 
         KStream<String, GenericRecord> stream = streamsBuilder.stream(inputTopic, Consumed.with(Serdes.String(), valueGenericAvroSerde));
+
+        MessagingMessageConverter messageConverter = new MessagingMessageConverter();
+
+
+        stream.process(() -> new MessagingProcessor<>(new LoggingMessagingFunction(), messageConverter));
 
         // Split the stream into initial and other messages
         Map<String, KStream<String, GenericRecord>> branches = stream.split(Named.as("branch"))
@@ -110,7 +121,7 @@ public class KafkaStreamsConfig {
         Duration joinWindowDuration = Duration.ofMinutes(40);
         KStream<String, AggregatedData> joinedStream = rekeyedOtherMessagesStream
                 .join(
-                        rekeyedFirstMessagesStream.selectKey((key, value) -> (String) convertValue(findNestedValue(value, "bpiId"))),
+                        rekeyedFirstMessagesStream,
                         (otherMessage, firstMessage) -> {
                             log.info("Joining otherMessage: {}, with firstMessage: {}", otherMessage, firstMessage);
                             AggregatedData aggregatedData = AggregatedData.builder()
@@ -121,8 +132,17 @@ public class KafkaStreamsConfig {
                             aggregatedData.add(GenericRecordUtil.convertGenericRecordToMap(otherMessage));
                             return aggregatedData;
                         },
-                        JoinWindows.ofTimeDifferenceAndGrace(joinWindowDuration, Duration.ofMinutes(5)),
+                        JoinWindows.ofTimeDifferenceWithNoGrace(joinWindowDuration),
                         StreamJoined.with(Serdes.String(), valueGenericAvroSerde, valueGenericAvroSerde)
+                                .withThisStoreSupplier(
+                                        Stores.persistentWindowStore(
+                                                "joined-window-store",
+                                                joinWindowDuration.plus(joinWindowDuration),
+                                                joinWindowDuration.plus(joinWindowDuration),
+                                                true
+                                        )
+                                ).withLoggingDisabled()
+
                 );
 
 
