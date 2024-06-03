@@ -19,6 +19,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.annotation.EnableKafkaStreams;
+import org.springframework.kafka.streams.messaging.MessagingFunction;
 import org.springframework.kafka.streams.messaging.MessagingProcessor;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.kafka.support.converter.MessagingMessageConverter;
@@ -72,9 +73,9 @@ public class KafkaStreamsConfig {
         KStream<String, GenericRecord> stream = streamsBuilder.stream(inputTopic, Consumed.with(Serdes.String(), valueGenericAvroSerde));
 
         MessagingMessageConverter messageConverter = new MessagingMessageConverter();
+        MessagingFunction mf  = new LoggingMessagingFunction();
 
-
-        stream.process(() -> new MessagingProcessor<>(new LoggingMessagingFunction(), messageConverter));
+        stream.process(() -> new MessagingProcessor<>(mf, messageConverter));
 
         // Split the stream into initial and other messages
         Map<String, KStream<String, GenericRecord>> branches = stream.split(Named.as("branch"))
